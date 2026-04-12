@@ -1,0 +1,63 @@
+{
+ "actions": [],
+ "creation": "2026-04-13 00:00:00",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "catalog_item",
+  "qty",
+  "rate",
+  "amount",
+  "tax_amount"
+ ],
+ "fields": [
+  {
+   "fieldname": "catalog_item",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Catalog Item",
+   "options": "Catalog Item",
+   "reqd": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "qty",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Qty",
+   "reqd": 1
+  },
+  {
+   "fieldname": "rate",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Rate",
+   "reqd": 1
+  },
+  {
+   "fieldname": "amount",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Amount"
+  },
+  {
+   "fieldname": "tax_amount",
+   "fieldtype": "Currency",
+   "label": "Tax Amount"
+  }
+ ],
+ "istable": 1,
+ "links": [],
+ "modified": "2026-04-13 00:00:00",
+ "modified_by": "Administrator",
+ "module": "Omnexa Experience",
+ "name": "Web Order Line",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "sort_field": "name",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

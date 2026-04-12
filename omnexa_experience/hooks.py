@@ -8,7 +8,7 @@ app_license = "mit"
 # Apps
 # ------------------
 
-# required_apps = []
+required_apps = ["omnexa_core", "omnexa_accounting"]
 
 # Each item in the list will be shown as an app in the apps page
 # add_to_apps_screen = [
@@ -83,7 +83,8 @@ app_license = "mit"
 # ------------
 
 # before_install = "omnexa_experience.install.before_install"
-# after_install = "omnexa_experience.install.after_install"
+after_install = "omnexa_experience.install.after_install"
+after_migrate = "omnexa_experience.install.after_migrate"
 
 # Uninstallation
 # ------------

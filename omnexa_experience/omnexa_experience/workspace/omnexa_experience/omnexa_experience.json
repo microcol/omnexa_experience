@@ -1,0 +1,95 @@
+{
+ "charts": [],
+ "content": "[{\"id\":\"omx-exp-h1\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Omnexa Experience</b></span>\",\"col\":12}},{\"id\":\"omx-exp-c1\",\"type\":\"card\",\"data\":{\"card_name\":\"Catalog & orders\",\"col\":4}},{\"id\":\"omx-exp-c2\",\"type\":\"card\",\"data\":{\"card_name\":\"Booking\",\"col\":4}}]",
+ "custom_blocks": [],
+ "docstatus": 0,
+ "doctype": "Workspace",
+ "for_user": "",
+ "hide_custom": 0,
+ "icon": "website",
+ "idx": 0,
+ "is_hidden": 0,
+ "label": "Omnexa Experience",
+ "links": [
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Catalog & orders",
+   "link_count": 0,
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Catalog Item",
+   "link_count": 0,
+   "link_to": "Catalog Item",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Web Order",
+   "link_count": 0,
+   "link_to": "Web Order",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Payment Intent",
+   "link_count": 0,
+   "link_to": "Payment Intent",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Booking",
+   "link_count": 0,
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Bookable Resource",
+   "link_count": 0,
+   "link_to": "Bookable Resource",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Booking",
+   "link_count": 0,
+   "link_to": "Booking",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  }
+ ],
+ "modified": "2026-04-13 15:30:00",
+ "modified_by": "Administrator",
+ "module": "Omnexa Experience",
+ "name": "Omnexa Experience",
+ "number_cards": [],
+ "owner": "Administrator",
+ "parent_page": "",
+ "public": 1,
+ "quick_lists": [],
+ "restrict_to_domain": "",
+ "roles": [],
+ "sequence_id": 7.0,
+ "shortcuts": [],
+ "title": "Omnexa Experience"
+}
