@@ -1,9 +1,15 @@
 # Copyright (c) 2026, Omnexa and contributors
 # License: MIT. See license.txt
 
+import hashlib
+import hmac
+import json
+
 import frappe
 from frappe.tests.utils import FrappeTestCase
 from frappe.utils import add_to_date, now_datetime
+
+from omnexa_experience.omnexa_experience.payment_webhook import process_payment_intent_webhook
 
 
 class TestOmnexaExperience(FrappeTestCase):
@@ -86,3 +92,39 @@ class TestOmnexaExperience(FrappeTestCase):
 		b2.status = "Confirmed"
 		with self.assertRaises(frappe.ValidationError):
 			b2.insert(ignore_permissions=True)
+
+	def _create_payment_intent(self):
+		intent = frappe.new_doc("Payment Intent")
+		intent.company = self.company
+		intent.amount = 100
+		intent.currency = "EGP"
+		intent.insert(ignore_permissions=True)
+		return intent
+
+	def test_payment_webhook_updates_payment_intent_status(self):
+		intent = self._create_payment_intent()
+		payload = {
+			"payment_intent": intent.name,
+			"status": "succeeded",
+			"provider_reference": "txn-001",
+		}
+		raw = json.dumps(payload, sort_keys=True)
+		secret = "test-secret"
+		signature = hmac.new(secret.encode(), raw.encode(), hashlib.sha256).hexdigest()
+		result = process_payment_intent_webhook(
+			event_id="evt-pay-1",
+			payload=payload,
+			received_signature=signature,
+			secret=secret,
+		)
+		self.assertEqual(result["status"], "processed")
+		intent.reload()
+		self.assertEqual(intent.status, "succeeded")
+		self.assertEqual(intent.client_secret_ref, "txn-001")
+
+	def test_payment_webhook_duplicate_event_is_idempotent(self):
+		intent = self._create_payment_intent()
+		payload = {"payment_intent": intent.name, "status": "processing"}
+		process_payment_intent_webhook(event_id="evt-pay-dup", payload=payload)
+		result = process_payment_intent_webhook(event_id="evt-pay-dup", payload=payload)
+		self.assertEqual(result["status"], "duplicate")

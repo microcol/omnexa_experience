@@ -1,7 +1,7 @@
 app_name = "omnexa_experience"
-app_title = "Omnexa Experience"
+app_title = "ErpGenEx — Experience"
 app_publisher = "Omnexa"
-app_description = "Public web, catalog, checkout, and booking for OmnexaERP"
+app_description = "Public web, catalog, checkout, and booking for ErpGenEx (omnexa_experience)"
 app_email = "dev@omnexa.local"
 app_license = "mit"
 
@@ -29,7 +29,7 @@ required_apps = ["omnexa_core", "omnexa_accounting"]
 # app_include_js = "/assets/omnexa_experience/js/omnexa_experience.js"
 
 # include js, css files in header of web template
-# web_include_css = "/assets/omnexa_experience/css/omnexa_experience.css"
+web_include_css = "/assets/omnexa_experience/css/design_tokens.css"
 # web_include_js = "/assets/omnexa_experience/js/omnexa_experience.js"
 
 # include custom scss in every website theme (without file extension ".scss")

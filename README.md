@@ -1,6 +1,6 @@
 ### Omnexa Experience
 
-Public web, catalog, checkout, and booking for OmnexaERP
+Public web, catalog, checkout, and booking for **ErpGenEx** (`omnexa_experience`)
 
 ### Installation
 
