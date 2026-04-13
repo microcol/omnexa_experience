@@ -6,6 +6,8 @@ from frappe import _
 from frappe.model.document import Document
 from frappe.utils import flt
 
+from omnexa_accounting.utils.party import get_or_create_web_guest_customer
+
 
 class WebOrder(Document):
 	def validate(self):
@@ -18,7 +20,8 @@ class WebOrder(Document):
 			return
 		si = frappe.new_doc("Sales Invoice")
 		si.company = self.company
-		si.customer_name = self.customer_email or _("Web Guest")
+		si.currency = frappe.db.get_value("Company", self.company, "default_currency")
+		si.customer = get_or_create_web_guest_customer(self.company)
 		si.posting_date = frappe.utils.today()
 		for row in self.lines or []:
 			ci_name = row.catalog_item
