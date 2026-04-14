@@ -1,0 +1,143 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-04-13 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "company",
+  "apply_to_public_site",
+  "section_colors",
+  "primary_color",
+  "primary_contrast",
+  "background_color",
+  "surface_color",
+  "foreground_color",
+  "section_typography",
+  "font_stack_for_web",
+  "section_brand_assets",
+  "logo_url",
+  "favicon_url"
+ ],
+ "fields": [
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "default": "0",
+   "description": "When enabled, this row becomes the only active public-web token override for the site (others are cleared).",
+   "fieldname": "apply_to_public_site",
+   "fieldtype": "Check",
+   "label": "Apply to public website"
+  },
+  {
+   "fieldname": "section_colors",
+   "fieldtype": "Section Break",
+   "label": "Colors (CSS tokens)"
+  },
+  {
+   "description": "Maps to --ox-primary. Format #RRGGBB.",
+   "fieldname": "primary_color",
+   "fieldtype": "Data",
+   "label": "Primary"
+  },
+  {
+   "description": "Maps to --ox-primary-contrast.",
+   "fieldname": "primary_contrast",
+   "fieldtype": "Data",
+   "label": "Primary contrast"
+  },
+  {
+   "description": "Maps to --ox-bg.",
+   "fieldname": "background_color",
+   "fieldtype": "Data",
+   "label": "Background"
+  },
+  {
+   "description": "Maps to --ox-surface.",
+   "fieldname": "surface_color",
+   "fieldtype": "Data",
+   "label": "Surface"
+  },
+  {
+   "description": "Maps to --ox-fg.",
+   "fieldname": "foreground_color",
+   "fieldtype": "Data",
+   "label": "Foreground"
+  },
+  {
+   "fieldname": "section_typography",
+   "fieldtype": "Section Break",
+   "label": "Typography"
+  },
+  {
+   "description": "Maps to --ox-font-sans. Safe subset only (letters, numbers, commas, spaces, hyphens, quotes). Max 200 chars.",
+   "fieldname": "font_stack_for_web",
+   "fieldtype": "Data",
+   "label": "Font stack (sans)"
+  },
+  {
+   "fieldname": "section_brand_assets",
+   "fieldtype": "Section Break",
+   "label": "Brand assets (URLs)"
+  },
+  {
+   "description": "HTTPS (or HTTP) image URL; exposed as CSS --ox-logo-url and og:image. Max 2048 chars; no quotes or angle brackets.",
+   "fieldname": "logo_url",
+   "fieldtype": "Data",
+   "label": "Logo URL"
+  },
+  {
+   "description": "HTTPS (or HTTP) icon URL; injected as <link rel=\"icon\">. Same safety rules as logo.",
+   "fieldname": "favicon_url",
+   "fieldtype": "Data",
+   "label": "Favicon URL"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-04-13 00:00:00",
+ "modified_by": "Administrator",
+ "module": "Omnexa Experience",
+ "name": "Experience Tenant Theme",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 0,
+   "delete": 0,
+   "email": 0,
+   "export": 0,
+   "print": 0,
+   "read": 1,
+   "report": 0,
+   "role": "Desk User",
+   "share": 0,
+   "write": 0
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

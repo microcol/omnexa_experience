@@ -4,45 +4,46 @@
 import hashlib
 import hmac
 import json
+from unittest.mock import patch
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
 from frappe.utils import add_to_date, now_datetime
 
+from omnexa_core.omnexa_core.test_data import create_test_company, ensure_pilot_geo
+from omnexa_experience.omnexa_experience.guest_catalog import (
+	create_guest_cart_web_order,
+	get_published_catalog_item,
+	list_published_catalog_items,
+)
+from omnexa_experience.omnexa_experience.guest_booking import (
+	cancel_guest_booking,
+	confirm_guest_booking,
+	create_guest_booking,
+	create_guest_booking_hold,
+	get_guest_booking,
+	list_bookable_resources,
+	list_confirmed_bookings_for_resource,
+)
+from omnexa_experience.omnexa_experience.guest_checkout import (
+	get_guest_web_order,
+	submit_guest_web_order,
+)
 from omnexa_experience.omnexa_experience.payment_webhook import process_payment_intent_webhook
+from omnexa_experience.omnexa_experience.portal_me import (
+	get_my_booking,
+	get_my_web_order,
+	list_my_bookings,
+	list_my_web_orders,
+)
+from omnexa_experience.omnexa_experience.web_theme import HEAD_MARKER, update_website_context
 
 
 class TestOmnexaExperience(FrappeTestCase):
 	def setUp(self):
 		super().setUp()
-		self._ensure_geo()
-		self.company = self._create_company("OMNX-EXP")
-
-	def _ensure_geo(self):
-		if not frappe.db.exists("Currency", "EGP"):
-			frappe.get_doc(
-				{"doctype": "Currency", "currency_name": "EGP", "symbol": "E£", "enabled": 1}
-			).insert(ignore_permissions=True)
-		if not frappe.db.exists("Country", "Egypt"):
-			frappe.get_doc(
-				{"doctype": "Country", "country_name": "Egypt", "code": "EG"}
-			).insert(ignore_permissions=True)
-
-	def _create_company(self, abbr: str):
-		if frappe.db.exists("Company", {"abbr": abbr}):
-			return frappe.db.get_value("Company", {"abbr": abbr}, "name")
-		doc = frappe.get_doc(
-			{
-				"doctype": "Company",
-				"company_name": f"Test Co {abbr}",
-				"abbr": abbr,
-				"default_currency": "EGP",
-				"country": "Egypt",
-				"status": "Active",
-			}
-		)
-		doc.insert(ignore_permissions=True)
-		return doc.name
+		ensure_pilot_geo()
+		self.company = create_test_company("OMNX-EXP")
 
 	def _catalog(self, slug="sku-1"):
 		c = frappe.new_doc("Catalog Item")
@@ -54,6 +55,20 @@ class TestOmnexaExperience(FrappeTestCase):
 		c.published = 1
 		c.insert(ignore_permissions=True)
 		return c.name
+
+	def _income_gl(self, number="8800", name="Web Checkout Revenue"):
+		if frappe.db.exists("GL Account", {"company": self.company, "account_number": number}):
+			return frappe.db.get_value(
+				"GL Account", {"company": self.company, "account_number": number}, "name"
+			)
+		g = frappe.new_doc("GL Account")
+		g.company = self.company
+		g.account_number = number
+		g.account_name = name
+		g.is_group = 0
+		g.account_type = "Income"
+		g.insert(ignore_permissions=True)
+		return g.name
 
 	def test_web_order_idempotency_key_unique(self):
 		ci = self._catalog("sku-idem")
@@ -128,3 +143,454 @@ class TestOmnexaExperience(FrappeTestCase):
 		process_payment_intent_webhook(event_id="evt-pay-dup", payload=payload)
 		result = process_payment_intent_webhook(event_id="evt-pay-dup", payload=payload)
 		self.assertEqual(result["status"], "duplicate")
+
+	def test_guest_catalog_lists_published_only(self):
+		pub = self._catalog("guest-api-pub")
+		frappe.db.set_value("Catalog Item", pub, "published", 1, update_modified=False)
+		priv = self._catalog("guest-api-priv")
+		frappe.db.set_value("Catalog Item", priv, "published", 0, update_modified=False)
+		frappe.set_user("Guest")
+		try:
+			out = list_published_catalog_items(company=self.company)
+		finally:
+			frappe.set_user("Administrator")
+		slugs = {r["slug"] for r in out["items"]}
+		self.assertIn("guest-api-pub", slugs)
+		self.assertNotIn("guest-api-priv", slugs)
+
+	def test_guest_catalog_get_by_slug(self):
+		ci = self._catalog("slug-detail-1")
+		frappe.db.set_value("Catalog Item", ci, "published", 1, update_modified=False)
+		frappe.set_user("Guest")
+		try:
+			row = get_published_catalog_item(company=self.company, slug="slug-detail-1")
+		finally:
+			frappe.set_user("Administrator")
+		self.assertEqual(row["slug"], "slug-detail-1")
+		self.assertEqual(row["name"], ci)
+
+	def test_guest_cart_creates_draft_web_order(self):
+		ci = self._catalog("cart-line-a")
+		frappe.db.set_value("Catalog Item", ci, "published", 1, update_modified=False)
+		lines = [{"catalog_item": ci, "qty": 2, "rate": 15.5}]
+		frappe.set_user("Guest")
+		try:
+			out1 = create_guest_cart_web_order(
+				company=self.company,
+				idempotency_key="cart-key-1",
+				lines=lines,
+			)
+			out2 = create_guest_cart_web_order(
+				company=self.company,
+				idempotency_key="cart-key-1",
+				lines=lines,
+			)
+		finally:
+			frappe.set_user("Administrator")
+		self.assertEqual(out1["name"], out2["name"])
+		self.assertEqual(out1["status"], "Draft")
+		self.assertEqual(out1["grand_total"], 31.0)
+		wo = frappe.get_doc("Web Order", out1["name"])
+		self.assertEqual(wo.docstatus, 0)
+
+	def test_guest_cart_rejects_unpublished_item(self):
+		ci = self._catalog("cart-unpub")
+		frappe.db.set_value("Catalog Item", ci, "published", 0, update_modified=False)
+		lines = [{"catalog_item": ci, "qty": 1, "rate": 10}]
+		frappe.set_user("Guest")
+		try:
+			with self.assertRaises(frappe.ValidationError):
+				create_guest_cart_web_order(
+					company=self.company,
+					idempotency_key="cart-key-unpub",
+					lines=lines,
+				)
+		finally:
+			frappe.set_user("Administrator")
+
+	def test_guest_checkout_submit_creates_sales_invoice(self):
+		self._income_gl()
+		ci = self._catalog("checkout-sku")
+		frappe.db.set_value("Catalog Item", ci, "published", 1, update_modified=False)
+		lines = [{"catalog_item": ci, "qty": 1, "rate": 42}]
+		frappe.set_user("Guest")
+		try:
+			cart = create_guest_cart_web_order(
+				company=self.company,
+				idempotency_key="checkout-idem-1",
+				lines=lines,
+			)
+			out = submit_guest_web_order(
+				web_order=cart["name"],
+				company=self.company,
+				idempotency_key="checkout-idem-1",
+			)
+			out2 = submit_guest_web_order(
+				web_order=cart["name"],
+				company=self.company,
+				idempotency_key="checkout-idem-1",
+			)
+		finally:
+			frappe.set_user("Administrator")
+		self.assertEqual(out["docstatus"], 1)
+		self.assertEqual(out2["docstatus"], 1)
+		self.assertEqual(out["name"], out2["name"])
+		self.assertTrue(out.get("sales_invoice"))
+		self.assertEqual(out["status"], "Confirmed")
+		pub = get_guest_web_order(web_order=cart["name"], company=self.company)
+		self.assertEqual(pub["sales_invoice"], out["sales_invoice"])
+
+	def test_guest_checkout_rejects_bad_idempotency_key(self):
+		self._income_gl()
+		ci = self._catalog("checkout-sku-2")
+		frappe.db.set_value("Catalog Item", ci, "published", 1, update_modified=False)
+		frappe.set_user("Guest")
+		try:
+			cart = create_guest_cart_web_order(
+				company=self.company,
+				idempotency_key="checkout-idem-2",
+				lines=[{"catalog_item": ci, "qty": 1, "rate": 1}],
+			)
+			with self.assertRaises(frappe.ValidationError):
+				submit_guest_web_order(
+					web_order=cart["name"],
+					company=self.company,
+					idempotency_key="wrong-key",
+				)
+		finally:
+			frappe.set_user("Administrator")
+
+	def _bookable_resource(self, name="Room Guest API"):
+		r = frappe.new_doc("Bookable Resource")
+		r.company = self.company
+		r.resource_name = name
+		r.slot_duration_minutes = 60
+		r.insert(ignore_permissions=True)
+		return r.name
+
+	def test_guest_list_bookable_resources(self):
+		rn = self._bookable_resource("Res A")
+		frappe.set_user("Guest")
+		try:
+			out = list_bookable_resources(company=self.company)
+		finally:
+			frappe.set_user("Administrator")
+		names = {x["name"] for x in out["resources"]}
+		self.assertIn(rn, names)
+
+	def test_guest_booking_create_list_cancel(self):
+		res = self._bookable_resource("Res B")
+		start = now_datetime()
+		end = add_to_date(start, hours=1)
+		frappe.set_user("Guest")
+		try:
+			b1 = create_guest_booking(
+				company=self.company,
+				bookable_resource=res,
+				start_datetime=start,
+				end_datetime=end,
+				customer_email="a@example.com",
+				idempotency_key="bkg-1",
+			)
+			b1b = create_guest_booking(
+				company=self.company,
+				bookable_resource=res,
+				start_datetime=start,
+				end_datetime=end,
+				customer_email="a@example.com",
+				idempotency_key="bkg-1",
+			)
+			lst = list_confirmed_bookings_for_resource(
+				company=self.company,
+				bookable_resource=res,
+				start=start.isoformat(),
+				end=add_to_date(end, hours=2).isoformat(),
+			)
+			got = get_guest_booking(booking=b1["name"], company=self.company)
+			cancelled = cancel_guest_booking(booking=b1["name"], company=self.company)
+			cancelled2 = cancel_guest_booking(booking=b1["name"], company=self.company)
+		finally:
+			frappe.set_user("Administrator")
+		self.assertEqual(b1["name"], b1b["name"])
+		self.assertEqual(b1["status"], "Confirmed")
+		self.assertTrue(any(x["name"] == b1["name"] for x in lst["bookings"]))
+		self.assertEqual(got["customer_email"], "a@example.com")
+		self.assertEqual(cancelled["status"], "Cancelled")
+		self.assertEqual(cancelled2["status"], "Cancelled")
+
+	def test_guest_booking_overlap_rejected_on_create(self):
+		res = self._bookable_resource("Res C")
+		start = now_datetime()
+		end = add_to_date(start, hours=1)
+		frappe.set_user("Guest")
+		try:
+			create_guest_booking(
+				company=self.company,
+				bookable_resource=res,
+				start_datetime=start,
+				end_datetime=end,
+				status="Confirmed",
+			)
+			with self.assertRaises(frappe.ValidationError):
+				create_guest_booking(
+					company=self.company,
+					bookable_resource=res,
+					start_datetime=add_to_date(start, minutes=30),
+					end_datetime=add_to_date(end, minutes=30),
+					status="Confirmed",
+				)
+		finally:
+			frappe.set_user("Administrator")
+
+	def test_guest_hold_then_confirm(self):
+		res = self._bookable_resource("Res Hold")
+		start = now_datetime()
+		end = add_to_date(start, hours=1)
+		frappe.set_user("Guest")
+		try:
+			h = create_guest_booking_hold(
+				company=self.company,
+				bookable_resource=res,
+				start_datetime=start,
+				end_datetime=end,
+				idempotency_key="hold-idem-1",
+				hold_ttl_minutes=30,
+			)
+			self.assertEqual(h["status"], "Draft")
+			self.assertTrue(h.get("hold_expires_at"))
+			c = confirm_guest_booking(booking=h["name"], company=self.company)
+			self.assertEqual(c["status"], "Confirmed")
+			self.assertIsNone(c.get("hold_expires_at"))
+			c2 = confirm_guest_booking(booking=h["name"], company=self.company)
+			self.assertEqual(c2["status"], "Confirmed")
+		finally:
+			frappe.set_user("Administrator")
+
+	def test_guest_overlapping_hold_rejected(self):
+		res = self._bookable_resource("Res Hold2")
+		start = now_datetime()
+		end = add_to_date(start, hours=1)
+		frappe.set_user("Guest")
+		try:
+			create_guest_booking_hold(
+				company=self.company,
+				bookable_resource=res,
+				start_datetime=start,
+				end_datetime=end,
+				hold_ttl_minutes=30,
+			)
+			with self.assertRaises(frappe.ValidationError):
+				create_guest_booking_hold(
+					company=self.company,
+					bookable_resource=res,
+					start_datetime=add_to_date(start, minutes=30),
+					end_datetime=add_to_date(end, minutes=30),
+					hold_ttl_minutes=30,
+				)
+		finally:
+			frappe.set_user("Administrator")
+
+	def test_guest_confirm_rejects_expired_hold(self):
+		res = self._bookable_resource("Res Hold3")
+		start = now_datetime()
+		end = add_to_date(start, hours=1)
+		frappe.set_user("Guest")
+		try:
+			h = create_guest_booking_hold(
+				company=self.company,
+				bookable_resource=res,
+				start_datetime=start,
+				end_datetime=end,
+				hold_ttl_minutes=30,
+			)
+		finally:
+			frappe.set_user("Administrator")
+		frappe.db.set_value(
+			"Booking",
+			h["name"],
+			"hold_expires_at",
+			add_to_date(now_datetime(), hours=-1),
+			update_modified=False,
+		)
+		frappe.set_user("Guest")
+		try:
+			with self.assertRaises(frappe.ValidationError):
+				confirm_guest_booking(booking=h["name"], company=self.company)
+		finally:
+			frappe.set_user("Administrator")
+
+	def _portal_token_setup(self, token: str):
+		frappe.conf["omnexa_experience_portal_api_token"] = token
+
+	def _portal_token_teardown(self):
+		frappe.conf.pop("omnexa_experience_portal_api_token", None)
+
+	def test_portal_me_list_orders_requires_bearer(self):
+		self._portal_token_setup("portal-secret-1")
+		try:
+			ci = self._catalog("sku-portal-me")
+			wo = frappe.new_doc("Web Order")
+			wo.company = self.company
+			wo.customer_email = "buyer@example.com"
+			wo.append("lines", {"catalog_item": ci, "qty": 1, "rate": 10})
+			wo.insert(ignore_permissions=True)
+			with patch.object(frappe, "get_request_header", return_value=None):
+				with self.assertRaises(frappe.PermissionError):
+					list_my_web_orders(company=self.company, customer_email="buyer@example.com")
+			with patch.object(frappe, "get_request_header", return_value="Bearer wrong"):
+				with self.assertRaises(frappe.PermissionError):
+					list_my_web_orders(company=self.company, customer_email="buyer@example.com")
+			with patch.object(frappe, "get_request_header", return_value="Bearer portal-secret-1"):
+				out = list_my_web_orders(company=self.company, customer_email="Buyer@Example.com")
+			self.assertEqual(len(out["orders"]), 1)
+			self.assertEqual(out["orders"][0]["name"], wo.name)
+		finally:
+			self._portal_token_teardown()
+
+	def test_portal_me_get_order_wrong_email(self):
+		self._portal_token_setup("portal-secret-2")
+		try:
+			ci = self._catalog("sku-portal-me-2")
+			wo = frappe.new_doc("Web Order")
+			wo.company = self.company
+			wo.customer_email = "a@example.com"
+			wo.append("lines", {"catalog_item": ci, "qty": 1, "rate": 1})
+			wo.insert(ignore_permissions=True)
+			with patch.object(frappe, "get_request_header", return_value="Bearer portal-secret-2"):
+				with self.assertRaises(frappe.DoesNotExistError):
+					get_my_web_order(
+						web_order=wo.name,
+						company=self.company,
+						customer_email="b@example.com",
+					)
+		finally:
+			self._portal_token_teardown()
+
+	def test_portal_me_list_bookings(self):
+		self._portal_token_setup("portal-secret-3")
+		try:
+			res = self._bookable_resource("Res Portal Me")
+			start = add_to_date(now_datetime(), days=1, as_datetime=True)
+			end = add_to_date(start, hours=2, as_datetime=True)
+			b = frappe.new_doc("Booking")
+			b.company = self.company
+			b.bookable_resource = res
+			b.start_datetime = start
+			b.end_datetime = end
+			b.customer_email = "booker@example.com"
+			b.status = "Confirmed"
+			b.insert(ignore_permissions=True)
+			with patch.object(frappe, "get_request_header", return_value="Bearer portal-secret-3"):
+				out = list_my_bookings(company=self.company, customer_email="booker@example.com")
+			names = {r["name"] for r in out["bookings"]}
+			self.assertIn(b.name, names)
+		finally:
+			self._portal_token_teardown()
+
+	def test_portal_me_get_booking_wrong_email(self):
+		self._portal_token_setup("portal-secret-4")
+		try:
+			res = self._bookable_resource("Res Portal Me Detail")
+			start = add_to_date(now_datetime(), days=2, as_datetime=True)
+			end = add_to_date(start, hours=1, as_datetime=True)
+			b = frappe.new_doc("Booking")
+			b.company = self.company
+			b.bookable_resource = res
+			b.start_datetime = start
+			b.end_datetime = end
+			b.customer_email = "owner@example.com"
+			b.status = "Confirmed"
+			b.insert(ignore_permissions=True)
+			with patch.object(frappe, "get_request_header", return_value="Bearer portal-secret-4"):
+				with self.assertRaises(frappe.DoesNotExistError):
+					get_my_booking(
+						booking=b.name,
+						company=self.company,
+						customer_email="other@example.com",
+					)
+				row = get_my_booking(
+					booking=b.name,
+					company=self.company,
+					customer_email="Owner@Example.com",
+				)
+			self.assertEqual(row["name"], b.name)
+			self.assertEqual(row["status"], "Confirmed")
+		finally:
+			self._portal_token_teardown()
+
+	def test_experience_tenant_theme_rejects_bad_hex(self):
+		t = frappe.new_doc("Experience Tenant Theme")
+		t.company = self.company
+		t.primary_color = "not-a-color"
+		with self.assertRaises(frappe.ValidationError):
+			t.insert(ignore_permissions=True)
+
+	def test_experience_tenant_theme_rejects_low_primary_contrast(self):
+		company_c = create_test_company("OMNX-EXP-CONT")
+		t = frappe.new_doc("Experience Tenant Theme")
+		t.company = company_c
+		t.primary_color = "#777777"
+		t.primary_contrast = "#888888"
+		with self.assertRaises(frappe.ValidationError):
+			t.insert(ignore_permissions=True)
+
+	def test_experience_tenant_theme_accepts_strong_primary_contrast(self):
+		company_c = create_test_company("OMNX-EXP-CONT2")
+		t = frappe.new_doc("Experience Tenant Theme")
+		t.company = company_c
+		t.primary_color = "#2563eb"
+		t.primary_contrast = "#ffffff"
+		t.insert(ignore_permissions=True)
+		self.assertEqual(t.primary_color, "#2563eb")
+
+	def test_experience_tenant_theme_single_active_and_head_inject(self):
+		company_b = create_test_company("OMNX-EXP-THEME")
+		for nm in frappe.get_all("Experience Tenant Theme", pluck="name"):
+			frappe.delete_doc("Experience Tenant Theme", nm, force=True, ignore_permissions=True)
+		a = frappe.new_doc("Experience Tenant Theme")
+		a.company = self.company
+		a.apply_to_public_site = 1
+		a.primary_color = "#112233"
+		a.insert(ignore_permissions=True)
+		b = frappe.new_doc("Experience Tenant Theme")
+		b.company = company_b
+		b.apply_to_public_site = 1
+		b.primary_color = "#445566"
+		b.insert(ignore_permissions=True)
+		try:
+			a.reload()
+			self.assertEqual(a.apply_to_public_site, 0)
+			out = update_website_context({})
+			self.assertIn(HEAD_MARKER, out.get("head_html", ""))
+			self.assertIn("omnexa-experience-tenant-theme", out.get("head_html", ""))
+			self.assertIn("--ox-primary: #445566", out["head_html"])
+		finally:
+			frappe.delete_doc("Experience Tenant Theme", b.name, force=True, ignore_permissions=True)
+			frappe.delete_doc("Experience Tenant Theme", a.name, force=True, ignore_permissions=True)
+
+	def test_experience_tenant_theme_rejects_bad_asset_url(self):
+		company_c = create_test_company("OMNX-BADURL")
+		t = frappe.new_doc("Experience Tenant Theme")
+		t.company = company_c
+		t.favicon_url = "javascript:alert(1)"
+		with self.assertRaises(frappe.ValidationError):
+			t.insert(ignore_permissions=True)
+
+	def test_experience_tenant_theme_favicon_only_inject(self):
+		for nm in frappe.get_all("Experience Tenant Theme", pluck="name"):
+			frappe.delete_doc("Experience Tenant Theme", nm, force=True, ignore_permissions=True)
+		company_c = create_test_company("OMNX-FAVICO")
+		t = frappe.new_doc("Experience Tenant Theme")
+		t.company = company_c
+		t.apply_to_public_site = 1
+		t.favicon_url = "https://example.com/favicon.ico"
+		t.insert(ignore_permissions=True)
+		try:
+			out = update_website_context({})
+			h = out.get("head_html", "")
+			self.assertIn(HEAD_MARKER, h)
+			self.assertIn('rel="icon"', h)
+			self.assertIn("https://example.com/favicon.ico", h)
+			self.assertNotIn("omnexa-experience-tenant-theme", h)
+		finally:
+			frappe.delete_doc("Experience Tenant Theme", t.name, force=True, ignore_permissions=True)

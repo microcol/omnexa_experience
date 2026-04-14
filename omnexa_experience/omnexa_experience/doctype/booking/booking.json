@@ -11,7 +11,8 @@
   "end_datetime",
   "customer_email",
   "payment_intent",
-  "status"
+  "status",
+  "hold_expires_at"
  ],
  "fields": [
   {
@@ -63,12 +64,18 @@
    "label": "Status",
    "options": "Draft\nConfirmed\nCancelled",
    "reqd": 1
+  },
+  {
+   "description": "Guest hold TTL end; null for non-hold bookings. Expired holds are auto-cancelled before overlap checks.",
+   "fieldname": "hold_expires_at",
+   "fieldtype": "Datetime",
+   "label": "Hold Expires At"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-04-13 00:00:00",
+ "modified": "2026-04-15 12:00:00",
  "modified_by": "Administrator",
  "module": "Omnexa Experience",
  "name": "Booking",

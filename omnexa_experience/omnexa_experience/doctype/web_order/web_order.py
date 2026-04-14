@@ -9,6 +9,24 @@ from frappe.utils import flt
 from omnexa_accounting.utils.party import get_or_create_web_guest_customer
 
 
+def _default_income_gl(company: str) -> str | None:
+	"""Prefer a leaf **Income** GL for the company; otherwise any non-group GL."""
+	acc = frappe.db.get_value(
+		"GL Account",
+		{"company": company, "is_group": 0, "account_type": "Income"},
+		"name",
+		order_by="account_number,name",
+	)
+	if acc:
+		return acc
+	return frappe.db.get_value(
+		"GL Account",
+		{"company": company, "is_group": 0},
+		"name",
+		order_by="account_number,name",
+	)
+
+
 class WebOrder(Document):
 	def validate(self):
 		self._validate_idempotency()
@@ -18,6 +36,14 @@ class WebOrder(Document):
 	def on_submit(self):
 		if self.sales_invoice:
 			return
+		income_acc = _default_income_gl(self.company)
+		if not income_acc:
+			frappe.throw(
+				_("Configure at least one GL Account for company {0} before checkout.").format(
+					self.company
+				),
+				title=_("Accounts"),
+			)
 		si = frappe.new_doc("Sales Invoice")
 		si.company = self.company
 		si.currency = frappe.db.get_value("Company", self.company, "default_currency")
@@ -33,11 +59,13 @@ class WebOrder(Document):
 					"qty": row.qty,
 					"rate": row.rate,
 					"amount": row.amount,
+					"income_account": income_acc,
 				},
 			)
 		si.insert(ignore_permissions=True)
 		si.submit()
 		self.db_set("sales_invoice", si.name, update_modified=False)
+		frappe.db.set_value(self.doctype, self.name, "status", "Confirmed", update_modified=False)
 
 	def _validate_line_companies(self):
 		for row in self.lines or []:

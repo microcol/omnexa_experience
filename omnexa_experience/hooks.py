@@ -32,6 +32,11 @@ required_apps = ["omnexa_core", "omnexa_accounting"]
 web_include_css = "/assets/omnexa_experience/css/design_tokens.css"
 # web_include_js = "/assets/omnexa_experience/js/omnexa_experience.js"
 
+# Tenant CSS token overrides on public web (see DocType Experience Tenant Theme)
+update_website_context = [
+	"omnexa_experience.omnexa_experience.web_theme.update_website_context",
+]
+
 # include custom scss in every website theme (without file extension ".scss")
 # website_theme_scss = "omnexa_experience/public/scss/website"
 

@@ -44,6 +44,8 @@
 
   /* Focus */
   --ox-focus-ring: 0 0 0 3px rgba(37, 99, 235, 0.25);
+
+  /* Optional: --ox-logo-url set by Experience Tenant Theme (logo_url) for custom header / background-image */
 }
 
 /* Dark mode (optional): enable via <html data-theme="dark"> */
