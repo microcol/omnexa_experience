@@ -8,7 +8,8 @@ import re
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import validate_url
+from frappe.rate_limiter import rate_limit
+from frappe.utils import cint, now_datetime, validate_url
 
 _HEX6 = re.compile(r"^#[0-9A-Fa-f]{6}$")
 _FONT_STACK_SAFE = re.compile(r"^[a-zA-Z0-9, \-\.'\"]{1,200}$")
@@ -77,8 +78,11 @@ def _norm_asset_url(label: str, value: str | None) -> str | None:
 			_("{0} must not contain quotes, backslashes, angle brackets, or newlines.").format(label),
 			title=_("Theme"),
 		)
+	# Allow relative file URLs (e.g. /files/logo.png) for Attach fields; disallow other schemes.
+	if v.startswith("/"):
+		return v
 	if not validate_url(v, valid_schemes=("https", "http")):
-		frappe.throw(_("{0} must be a valid http(s) URL.").format(label), title=_("Theme"))
+		frappe.throw(_("{0} must be a valid http(s) URL or /files path.").format(label), title=_("Theme"))
 	return v
 
 
@@ -90,7 +94,10 @@ class ExperienceTenantTheme(Document):
 		self.surface_color = _norm_hex(_("Surface"), self.surface_color)
 		self.foreground_color = _norm_hex(_("Foreground"), self.foreground_color)
 		self.font_stack_for_web = _norm_font_stack(self.font_stack_for_web)
+		# Attach fields store file URLs as strings; normalize/validate both attach and fallback URL fields.
+		self.logo = _norm_asset_url(_("Logo"), self.logo)
 		self.logo_url = _norm_asset_url(_("Logo URL"), self.logo_url)
+		self.favicon = _norm_asset_url(_("Favicon"), self.favicon)
 		self.favicon_url = _norm_asset_url(_("Favicon URL"), self.favicon_url)
 		if self.primary_color and self.primary_contrast:
 			ratio = _contrast_ratio(self.primary_contrast, self.primary_color)
@@ -114,3 +121,161 @@ class ExperienceTenantTheme(Document):
 				""",
 				{"name": self.name or ""},
 			)
+
+
+def _assert_theme_admin():
+	if frappe.session.user == "Guest":
+		frappe.throw(_("Login required."), frappe.PermissionError, title=_("Theme"))
+	frappe.only_for("System Manager")
+
+
+def _get_theme_doc(theme: str):
+	if not theme or not frappe.db.exists("Experience Tenant Theme", theme):
+		frappe.throw(_("Theme not found."), frappe.DoesNotExistError, title=_("Theme"))
+	return frappe.get_doc("Experience Tenant Theme", theme)
+
+
+def _stamp_publish(doc, note: str | None = None):
+	doc.published_at = now_datetime()
+	doc.published_by = frappe.session.user
+	doc.publish_note = (note or "").strip()[:500] or None
+
+
+def _theme_snapshot(doc) -> dict:
+	return {
+		"name": doc.name,
+		"company": doc.company,
+		"apply_to_public_site": cint(doc.apply_to_public_site) or 0,
+		"primary_color": doc.primary_color or "",
+		"primary_contrast": doc.primary_contrast or "",
+		"background_color": doc.background_color or "",
+		"surface_color": doc.surface_color or "",
+		"foreground_color": doc.foreground_color or "",
+		"font_stack_for_web": doc.font_stack_for_web or "",
+		"logo": doc.logo or "",
+		"logo_url": doc.logo_url or "",
+		"favicon": doc.favicon or "",
+		"favicon_url": doc.favicon_url or "",
+		"published_at": doc.published_at,
+		"published_by": doc.published_by or "",
+		"publish_note": doc.publish_note or "",
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+@rate_limit(limit=30, seconds=60, methods=["POST"])
+def publish_theme(theme: str | None = None, company: str | None = None, note: str | None = None):
+	"""Publish a theme (set active public theme) and stamp publish metadata."""
+	_assert_theme_admin()
+	doc = _get_theme_doc(theme)
+	if company and doc.company != company:
+		frappe.throw(_("Theme does not belong to this company."), title=_("Theme"))
+	doc.apply_to_public_site = 1
+	_stamp_publish(doc, note=note)
+	doc.save(ignore_permissions=True)
+	return {"theme": doc.name, "company": doc.company, "published_at": doc.published_at}
+
+
+@frappe.whitelist(methods=["POST"])
+@rate_limit(limit=30, seconds=60, methods=["POST"])
+def rollback_theme(company: str | None = None, note: str | None = None):
+	"""Rollback to last published theme for a company (excluding current active)."""
+	_assert_theme_admin()
+	if not company or not frappe.db.exists("Company", company):
+		frappe.throw(_("A valid company is required."), title=_("Theme"))
+	current = frappe.db.get_value("Experience Tenant Theme", {"company": company, "apply_to_public_site": 1}, "name")
+	rows = frappe.get_all(
+		"Experience Tenant Theme",
+		filters={"company": company, "published_at": ("is", "set")},
+		fields=["name", "published_at"],
+		order_by="published_at desc",
+		limit_page_length=2,
+		ignore_permissions=True,
+	)
+	target = None
+	for row in rows:
+		if row["name"] != current:
+			target = row["name"]
+			break
+	if not target:
+		frappe.throw(_("No previous published theme available for rollback."), title=_("Theme"))
+	return publish_theme(theme=target, company=company, note=(note or "rollback"))
+
+
+@frappe.whitelist(methods=["POST"])
+@rate_limit(limit=30, seconds=60, methods=["POST"])
+def rollback_theme_to(theme: str | None = None, company: str | None = None, note: str | None = None):
+	"""Rollback by explicitly selecting a previously published theme row."""
+	_assert_theme_admin()
+	doc = _get_theme_doc(theme)
+	if not company or not frappe.db.exists("Company", company):
+		frappe.throw(_("A valid company is required."), title=_("Theme"))
+	if doc.company != company:
+		frappe.throw(_("Theme does not belong to this company."), title=_("Theme"))
+	if not doc.published_at:
+		frappe.throw(_("Selected theme has never been published."), title=_("Theme"))
+	return publish_theme(theme=doc.name, company=company, note=(note or "rollback_to"))
+
+
+@frappe.whitelist(methods=["GET"])
+@rate_limit(limit=60, seconds=60, methods=["GET"])
+def list_theme_publish_history(company: str | None = None, limit_page_length: int | str | None = 20):
+	"""List latest published theme events for a company."""
+	_assert_theme_admin()
+	if not company or not frappe.db.exists("Company", company):
+		frappe.throw(_("A valid company is required."), title=_("Theme"))
+	page = min(max(cint(limit_page_length) or 20, 1), 100)
+	rows = frappe.get_all(
+		"Experience Tenant Theme",
+		filters={"company": company, "published_at": ("is", "set")},
+		fields=["name", "published_at", "published_by", "publish_note", "apply_to_public_site"],
+		order_by="published_at desc",
+		limit_page_length=page,
+		ignore_permissions=True,
+	)
+	return {"history": rows, "limit_page_length": page}
+
+
+@frappe.whitelist(methods=["GET"])
+@rate_limit(limit=60, seconds=60, methods=["GET"])
+def compare_themes(theme_a: str | None = None, theme_b: str | None = None, company: str | None = None):
+	"""Compare two theme versions and return field-level differences."""
+	_assert_theme_admin()
+	doc_a = _get_theme_doc(theme_a or "")
+	doc_b = _get_theme_doc(theme_b or "")
+	if company:
+		if not frappe.db.exists("Company", company):
+			frappe.throw(_("A valid company is required."), title=_("Theme"))
+		if doc_a.company != company or doc_b.company != company:
+			frappe.throw(_("Both themes must belong to the requested company."), title=_("Theme"))
+	if doc_a.company != doc_b.company:
+		frappe.throw(_("Themes must belong to the same company."), title=_("Theme"))
+
+	snap_a = _theme_snapshot(doc_a)
+	snap_b = _theme_snapshot(doc_b)
+	keys = [
+		"apply_to_public_site",
+		"primary_color",
+		"primary_contrast",
+		"background_color",
+		"surface_color",
+		"foreground_color",
+		"font_stack_for_web",
+		"logo",
+		"logo_url",
+		"favicon",
+		"favicon_url",
+		"published_at",
+		"published_by",
+		"publish_note",
+	]
+	diffs = []
+	for k in keys:
+		if (snap_a.get(k) or "") != (snap_b.get(k) or ""):
+			diffs.append({"field": k, "a": snap_a.get(k), "b": snap_b.get(k)})
+	return {
+		"theme_a": snap_a,
+		"theme_b": snap_b,
+		"diff_count": len(diffs),
+		"diffs": diffs,
+	}

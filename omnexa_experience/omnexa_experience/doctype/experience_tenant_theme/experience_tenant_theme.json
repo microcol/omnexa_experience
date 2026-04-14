@@ -16,8 +16,14 @@
   "section_typography",
   "font_stack_for_web",
   "section_brand_assets",
+  "logo",
   "logo_url",
-  "favicon_url"
+  "favicon",
+  "favicon_url",
+  "section_publish",
+  "published_at",
+  "published_by",
+  "publish_note"
  ],
  "fields": [
   {
@@ -26,8 +32,7 @@
    "in_list_view": 1,
    "label": "Company",
    "options": "Company",
-   "reqd": 1,
-   "unique": 1
+   "reqd": 1
   },
   {
    "default": "0",
@@ -85,25 +90,60 @@
   {
    "fieldname": "section_brand_assets",
    "fieldtype": "Section Break",
-   "label": "Brand assets (URLs)"
+   "label": "Brand assets"
   },
   {
-   "description": "HTTPS (or HTTP) image URL; exposed as CSS --ox-logo-url and og:image. Max 2048 chars; no quotes or angle brackets.",
+   "description": "Attach Image preferred for tenant-managed assets (stored under /files).",
+   "fieldname": "logo",
+   "fieldtype": "Attach Image",
+   "label": "Logo"
+  },
+  {
+   "description": "Fallback: http(s) image URL; exposed as CSS --ox-logo-url and og:image. Max 2048 chars; no quotes or angle brackets.",
    "fieldname": "logo_url",
    "fieldtype": "Data",
    "label": "Logo URL"
   },
   {
-   "description": "HTTPS (or HTTP) icon URL; injected as <link rel=\"icon\">. Same safety rules as logo.",
+   "description": "Attach preferred for tenant-managed icon (stored under /files).",
+   "fieldname": "favicon",
+   "fieldtype": "Attach",
+   "label": "Favicon"
+  },
+  {
+   "description": "Fallback: http(s) icon URL; injected as <link rel=\"icon\">. Same safety rules as logo.",
    "fieldname": "favicon_url",
    "fieldtype": "Data",
    "label": "Favicon URL"
+  },
+  {
+   "fieldname": "section_publish",
+   "fieldtype": "Section Break",
+   "label": "Publish metadata"
+  },
+  {
+   "fieldname": "published_at",
+   "fieldtype": "Datetime",
+   "label": "Published At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "published_by",
+   "fieldtype": "Data",
+   "label": "Published By",
+   "read_only": 1
+  },
+  {
+   "fieldname": "publish_note",
+   "fieldtype": "Small Text",
+   "label": "Publish Note",
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-04-13 00:00:00",
+ "modified": "2026-04-15 00:00:00",
  "modified_by": "Administrator",
  "module": "Omnexa Experience",
  "name": "Experience Tenant Theme",

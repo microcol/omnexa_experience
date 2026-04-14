@@ -36,6 +36,7 @@ def _serialize_web_order_public(wo) -> dict:
 		"status": wo.status,
 		"docstatus": wo.docstatus,
 		"idempotency_key": wo.idempotency_key or "",
+		"customer_email": (wo.customer_email or "").strip(),
 		"grand_total": flt(wo.grand_total),
 		"lines": lines_out,
 		"sales_invoice": wo.sales_invoice or None,

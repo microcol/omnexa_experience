@@ -36,7 +36,22 @@ from omnexa_experience.omnexa_experience.portal_me import (
 	list_my_bookings,
 	list_my_web_orders,
 )
-from omnexa_experience.omnexa_experience.web_theme import HEAD_MARKER, update_website_context
+from omnexa_experience.omnexa_experience.web_theme import (
+	HEAD_MARKER,
+	preview_theme_head,
+	update_website_context,
+)
+from omnexa_experience.omnexa_experience.theme_preview import (
+	before_request_theme_preview,
+	create_theme_preview_token,
+)
+from omnexa_experience.omnexa_experience.doctype.experience_tenant_theme.experience_tenant_theme import (
+	compare_themes,
+	list_theme_publish_history,
+	publish_theme,
+	rollback_theme,
+	rollback_theme_to,
+)
 
 
 class TestOmnexaExperience(FrappeTestCase):
@@ -192,6 +207,68 @@ class TestOmnexaExperience(FrappeTestCase):
 		self.assertEqual(out1["grand_total"], 31.0)
 		wo = frappe.get_doc("Web Order", out1["name"])
 		self.assertEqual(wo.docstatus, 0)
+
+	def test_guest_cart_stores_customer_email(self):
+		ci = self._catalog("cart-email-1")
+		frappe.db.set_value("Catalog Item", ci, "published", 1, update_modified=False)
+		lines = [{"catalog_item": ci, "qty": 1, "rate": 10}]
+		frappe.set_user("Guest")
+		try:
+			out = create_guest_cart_web_order(
+				company=self.company,
+				idempotency_key="cart-email-key-1",
+				lines=lines,
+				customer_email="Buyer@Example.com",
+			)
+		finally:
+			frappe.set_user("Administrator")
+		self.assertEqual(out.get("customer_email"), "buyer@example.com")
+		wo = frappe.get_doc("Web Order", out["name"])
+		self.assertEqual((wo.customer_email or "").lower(), "buyer@example.com")
+
+	def test_guest_cart_idempotent_binds_email_once(self):
+		ci = self._catalog("cart-email-2")
+		frappe.db.set_value("Catalog Item", ci, "published", 1, update_modified=False)
+		lines = [{"catalog_item": ci, "qty": 1, "rate": 5}]
+		frappe.set_user("Guest")
+		try:
+			out1 = create_guest_cart_web_order(
+				company=self.company,
+				idempotency_key="cart-email-key-2",
+				lines=lines,
+			)
+			out2 = create_guest_cart_web_order(
+				company=self.company,
+				idempotency_key="cart-email-key-2",
+				lines=lines,
+				customer_email="late@example.com",
+			)
+		finally:
+			frappe.set_user("Administrator")
+		self.assertEqual(out1["name"], out2["name"])
+		self.assertEqual(out2.get("customer_email"), "late@example.com")
+
+	def test_guest_cart_rejects_conflicting_email_on_retry(self):
+		ci = self._catalog("cart-email-3")
+		frappe.db.set_value("Catalog Item", ci, "published", 1, update_modified=False)
+		lines = [{"catalog_item": ci, "qty": 1, "rate": 5}]
+		frappe.set_user("Guest")
+		try:
+			create_guest_cart_web_order(
+				company=self.company,
+				idempotency_key="cart-email-key-3",
+				lines=lines,
+				customer_email="a@example.com",
+			)
+			with self.assertRaises(frappe.ValidationError):
+				create_guest_cart_web_order(
+					company=self.company,
+					idempotency_key="cart-email-key-3",
+					lines=lines,
+					customer_email="b@example.com",
+				)
+		finally:
+			frappe.set_user("Administrator")
 
 	def test_guest_cart_rejects_unpublished_item(self):
 		ci = self._catalog("cart-unpub")
@@ -431,17 +508,23 @@ class TestOmnexaExperience(FrappeTestCase):
 			ci = self._catalog("sku-portal-me")
 			wo = frappe.new_doc("Web Order")
 			wo.company = self.company
-			wo.customer_email = "buyer@example.com"
+			wo.customer_email = "portal-list-unique@example.com"
 			wo.append("lines", {"catalog_item": ci, "qty": 1, "rate": 10})
 			wo.insert(ignore_permissions=True)
 			with patch.object(frappe, "get_request_header", return_value=None):
 				with self.assertRaises(frappe.PermissionError):
-					list_my_web_orders(company=self.company, customer_email="buyer@example.com")
+					list_my_web_orders(
+						company=self.company, customer_email="portal-list-unique@example.com"
+					)
 			with patch.object(frappe, "get_request_header", return_value="Bearer wrong"):
 				with self.assertRaises(frappe.PermissionError):
-					list_my_web_orders(company=self.company, customer_email="buyer@example.com")
+					list_my_web_orders(
+						company=self.company, customer_email="portal-list-unique@example.com"
+					)
 			with patch.object(frappe, "get_request_header", return_value="Bearer portal-secret-1"):
-				out = list_my_web_orders(company=self.company, customer_email="Buyer@Example.com")
+				out = list_my_web_orders(
+					company=self.company, customer_email="Portal-List-Unique@Example.com"
+				)
 			self.assertEqual(len(out["orders"]), 1)
 			self.assertEqual(out["orders"][0]["name"], wo.name)
 		finally:
@@ -594,3 +677,179 @@ class TestOmnexaExperience(FrappeTestCase):
 			self.assertNotIn("omnexa-experience-tenant-theme", h)
 		finally:
 			frappe.delete_doc("Experience Tenant Theme", t.name, force=True, ignore_permissions=True)
+
+	def test_experience_tenant_theme_attach_logo_and_favicon_inject(self):
+		for nm in frappe.get_all("Experience Tenant Theme", pluck="name"):
+			frappe.delete_doc("Experience Tenant Theme", nm, force=True, ignore_permissions=True)
+		company_c = create_test_company("OMNX-ATTACH")
+		t = frappe.new_doc("Experience Tenant Theme")
+		t.company = company_c
+		t.apply_to_public_site = 1
+		t.primary_color = "#112233"
+		t.primary_contrast = "#ffffff"
+		# Simulate Attach URL values (files already hosted by site)
+		t.logo = "/files/logo.png"
+		t.favicon = "/files/favicon.ico"
+		t.insert(ignore_permissions=True)
+		try:
+			out = update_website_context({})
+			h = out.get("head_html", "")
+			self.assertIn("/files/favicon.ico", h)
+			self.assertIn("/files/logo.png", h)
+			self.assertIn("--ox-logo-url", h)
+		finally:
+			frappe.delete_doc("Experience Tenant Theme", t.name, force=True, ignore_permissions=True)
+
+	def test_experience_tenant_theme_preview_head(self):
+		company_c = create_test_company("OMNX-PREVIEW")
+		t = frappe.new_doc("Experience Tenant Theme")
+		t.company = company_c
+		t.primary_color = "#112233"
+		t.primary_contrast = "#ffffff"
+		t.favicon_url = "https://example.com/preview.ico"
+		t.insert(ignore_permissions=True)
+		try:
+			out = preview_theme_head(theme=t.name, company=company_c)
+			self.assertEqual(out["theme"], t.name)
+			self.assertEqual(out["company"], company_c)
+			self.assertIn(HEAD_MARKER, out["head_html"])
+			self.assertIn("omnexa-experience-tenant-theme", out["head_html"])
+			self.assertIn("rel=\"icon\"", out["head_html"])
+			self.assertTrue(out["has_tokens"])
+			self.assertTrue(out["has_brand_assets"])
+		finally:
+			frappe.delete_doc("Experience Tenant Theme", t.name, force=True, ignore_permissions=True)
+
+	def test_experience_tenant_theme_preview_rejects_wrong_company(self):
+		company_c = create_test_company("OMNX-PREVIEW2")
+		t = frappe.new_doc("Experience Tenant Theme")
+		t.company = company_c
+		t.primary_color = "#223344"
+		t.primary_contrast = "#ffffff"
+		t.insert(ignore_permissions=True)
+		try:
+			with self.assertRaises(frappe.ValidationError):
+				preview_theme_head(theme=t.name, company=self.company)
+		finally:
+			frappe.delete_doc("Experience Tenant Theme", t.name, force=True, ignore_permissions=True)
+
+	def test_experience_tenant_theme_public_preview_token_flow(self):
+		company_c = create_test_company("OMNX-PUBPREV")
+		t = frappe.new_doc("Experience Tenant Theme")
+		t.company = company_c
+		t.primary_color = "#112233"
+		t.primary_contrast = "#ffffff"
+		t.insert(ignore_permissions=True)
+		try:
+			# Create token as admin (not Guest).
+			prev = create_theme_preview_token(theme=t.name, company=company_c)
+			self.assertTrue(prev.get("token"))
+
+			# Simulate a web request with query params.
+			frappe.form_dict = {
+				"ox_theme_preview": t.name,
+				"ox_preview_token": prev["token"],
+			}
+			before_request_theme_preview()
+
+			out = update_website_context({})
+			self.assertIn(HEAD_MARKER, out.get("head_html", ""))
+			self.assertIn("--ox-primary: #112233", out["head_html"])
+		finally:
+			frappe.form_dict = {}
+			if getattr(frappe.local, "flags", None):
+				frappe.local.flags.pop("omnexa_experience_theme_preview_row", None)
+			frappe.delete_doc("Experience Tenant Theme", t.name, force=True, ignore_permissions=True)
+
+	def test_theme_publish_and_history(self):
+		company_c = create_test_company("OMNX-PUBHIST")
+		a = frappe.new_doc("Experience Tenant Theme")
+		a.company = company_c
+		a.primary_color = "#112233"
+		a.primary_contrast = "#ffffff"
+		a.insert(ignore_permissions=True)
+		try:
+			pub = publish_theme(theme=a.name, company=company_c, note="initial publish")
+			self.assertEqual(pub["theme"], a.name)
+			a.reload()
+			self.assertEqual(a.apply_to_public_site, 1)
+			self.assertTrue(a.published_at)
+			h = list_theme_publish_history(company=company_c)
+			self.assertGreaterEqual(len(h["history"]), 1)
+			self.assertEqual(h["history"][0]["name"], a.name)
+		finally:
+			frappe.delete_doc("Experience Tenant Theme", a.name, force=True, ignore_permissions=True)
+
+	def test_theme_rollback_to_previous(self):
+		company_c = create_test_company("OMNX-ROLLBACK")
+		a = frappe.new_doc("Experience Tenant Theme")
+		a.company = company_c
+		a.primary_color = "#112233"
+		a.primary_contrast = "#ffffff"
+		a.insert(ignore_permissions=True)
+		b = frappe.new_doc("Experience Tenant Theme")
+		b.company = company_c
+		b.primary_color = "#223344"
+		b.primary_contrast = "#ffffff"
+		b.insert(ignore_permissions=True)
+		try:
+			publish_theme(theme=a.name, company=company_c, note="v1")
+			publish_theme(theme=b.name, company=company_c, note="v2")
+			out = rollback_theme(company=company_c, note="rollback to previous")
+			self.assertEqual(out["theme"], a.name)
+			a.reload()
+			b.reload()
+			self.assertEqual(a.apply_to_public_site, 1)
+			self.assertEqual(b.apply_to_public_site, 0)
+		finally:
+			frappe.delete_doc("Experience Tenant Theme", b.name, force=True, ignore_permissions=True)
+			frappe.delete_doc("Experience Tenant Theme", a.name, force=True, ignore_permissions=True)
+
+	def test_theme_rollback_to_specific_theme(self):
+		company_c = create_test_company("OMNX-ROLLTO")
+		a = frappe.new_doc("Experience Tenant Theme")
+		a.company = company_c
+		a.primary_color = "#101010"
+		a.primary_contrast = "#ffffff"
+		a.insert(ignore_permissions=True)
+		b = frappe.new_doc("Experience Tenant Theme")
+		b.company = company_c
+		b.primary_color = "#202020"
+		b.primary_contrast = "#ffffff"
+		b.insert(ignore_permissions=True)
+		try:
+			publish_theme(theme=a.name, company=company_c, note="v1")
+			publish_theme(theme=b.name, company=company_c, note="v2")
+			out = rollback_theme_to(theme=a.name, company=company_c, note="explicit rollback")
+			self.assertEqual(out["theme"], a.name)
+			a.reload()
+			b.reload()
+			self.assertEqual(a.apply_to_public_site, 1)
+			self.assertEqual(b.apply_to_public_site, 0)
+		finally:
+			frappe.delete_doc("Experience Tenant Theme", b.name, force=True, ignore_permissions=True)
+			frappe.delete_doc("Experience Tenant Theme", a.name, force=True, ignore_permissions=True)
+
+	def test_theme_compare_versions(self):
+		company_c = create_test_company("OMNX-CMP")
+		a = frappe.new_doc("Experience Tenant Theme")
+		a.company = company_c
+		a.primary_color = "#101010"
+		a.primary_contrast = "#ffffff"
+		a.insert(ignore_permissions=True)
+		b = frappe.new_doc("Experience Tenant Theme")
+		b.company = company_c
+		b.primary_color = "#202020"
+		b.primary_contrast = "#ffffff"
+		b.font_stack_for_web = "Arial, sans-serif"
+		b.insert(ignore_permissions=True)
+		try:
+			out = compare_themes(theme_a=a.name, theme_b=b.name, company=company_c)
+			self.assertEqual(out["theme_a"]["name"], a.name)
+			self.assertEqual(out["theme_b"]["name"], b.name)
+			self.assertGreaterEqual(out["diff_count"], 1)
+			fields = {d["field"] for d in out["diffs"]}
+			self.assertIn("primary_color", fields)
+		finally:
+			frappe.delete_doc("Experience Tenant Theme", b.name, force=True, ignore_permissions=True)
+			frappe.delete_doc("Experience Tenant Theme", a.name, force=True, ignore_permissions=True)

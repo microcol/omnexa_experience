@@ -37,6 +37,11 @@ update_website_context = [
 	"omnexa_experience.omnexa_experience.web_theme.update_website_context",
 ]
 
+# Public preview URL support for Experience Tenant Theme (query params)
+before_request = [
+	"omnexa_experience.omnexa_experience.theme_preview.before_request_theme_preview",
+]
+
 # include custom scss in every website theme (without file extension ".scss")
 # website_theme_scss = "omnexa_experience/public/scss/website"
 
@@ -48,7 +53,9 @@ update_website_context = [
 # page_js = {"page" : "public/js/file.js"}
 
 # include js in doctype views
-# doctype_js = {"doctype" : "public/js/doctype.js"}
+doctype_js = {
+	"Experience Tenant Theme": "public/js/experience_tenant_theme.js",
+}
 # doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}

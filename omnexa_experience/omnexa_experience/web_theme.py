@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import frappe
+from frappe import _
+from frappe.rate_limiter import rate_limit
 from frappe.utils import escape_html
 
 HEAD_MARKER = "<!-- omnexa-experience-tenant-head -->"
@@ -24,8 +26,9 @@ def _style_block_for_row(row: dict) -> str:
 		lines.append(f"  --ox-fg: {row['foreground_color']};")
 	if row.get("font_stack_for_web"):
 		lines.append(f"  --ox-font-sans: {row['font_stack_for_web']};")
-	if row.get("logo_url"):
-		lines.append(f'  --ox-logo-url: url("{row["logo_url"]}");')
+	logo = row.get("logo") or row.get("logo_url")
+	if logo:
+		lines.append(f'  --ox-logo-url: url("{logo}");')
 	if not lines:
 		return ""
 	body = "\n".join(lines)
@@ -34,13 +37,23 @@ def _style_block_for_row(row: dict) -> str:
 
 def _brand_links_html(row: dict) -> str:
 	parts: list[str] = []
-	if row.get("favicon_url"):
-		u = escape_html(row["favicon_url"])
+	favicon = row.get("favicon") or row.get("favicon_url")
+	if favicon:
+		u = escape_html(favicon)
 		parts.append(f'<link rel="icon" href="{u}">')
-	if row.get("logo_url"):
-		u = escape_html(row["logo_url"])
+	logo = row.get("logo") or row.get("logo_url")
+	if logo:
+		u = escape_html(logo)
 		parts.append(f'<meta property="og:image" content="{u}">')
 	return "".join(parts)
+
+
+def _head_html_for_row(row: dict) -> str:
+	style = _style_block_for_row(row)
+	links = _brand_links_html(row)
+	if not style and not links:
+		return ""
+	return HEAD_MARKER + links + style
 
 
 def get_active_public_theme_name() -> str | None:
@@ -62,10 +75,16 @@ def get_active_public_theme_name() -> str | None:
 def _get_active_theme_row() -> dict | None:
 	if not frappe.db.table_exists("Experience Tenant Theme"):
 		return None
+	preview = None
+	if getattr(frappe.local, "flags", None):
+		preview = frappe.local.flags.get("omnexa_experience_theme_preview_row")
+	if preview:
+		# The preview row is already a safe dict fetched by SQL in before_request hook.
+		return preview
 	rows = frappe.db.sql(
 		"""
 		select primary_color, primary_contrast, background_color, surface_color,
-			foreground_color, font_stack_for_web, logo_url, favicon_url
+			foreground_color, font_stack_for_web, logo, logo_url, favicon, favicon_url
 		from `tabExperience Tenant Theme`
 		where ifnull(apply_to_public_site, 0) = 1
 		order by modified desc
@@ -88,13 +107,48 @@ def update_website_context(context: dict):
 	if not row:
 		return {}
 
-	style = _style_block_for_row(row)
-	links = _brand_links_html(row)
-	if not style and not links:
+	block = _head_html_for_row(row)
+	if not block:
 		return {}
 
 	head = context.get("head_html") or ""
 	if HEAD_MARKER in head:
 		return {}
 
-	return {"head_html": head + HEAD_MARKER + links + style}
+	return {"head_html": head + block}
+
+
+@frappe.whitelist(methods=["GET"])
+@rate_limit(limit=120, seconds=60, methods=["GET"])
+def preview_theme_head(theme: str | None = None, company: str | None = None):
+	"""Desk helper: return generated theme head HTML for preview before publish."""
+	if not theme or not frappe.db.exists("Experience Tenant Theme", theme):
+		frappe.throw(_("Theme not found."), frappe.DoesNotExistError, title=_("Theme"))
+	if company and not frappe.db.exists("Company", company):
+		frappe.throw(_("A valid company is required."), title=_("Theme"))
+
+	row_list = frappe.db.sql(
+		"""
+		select name, company, primary_color, primary_contrast, background_color, surface_color,
+			foreground_color, font_stack_for_web, logo, logo_url, favicon, favicon_url
+		from `tabExperience Tenant Theme`
+		where name = %(name)s
+		limit 1
+		""",
+		{"name": theme},
+		as_dict=True,
+	)
+	row = row_list[0] if row_list else None
+	if not row:
+		frappe.throw(_("Theme not found."), frappe.DoesNotExistError, title=_("Theme"))
+	if company and row.get("company") != company:
+		frappe.throw(_("Theme does not belong to this company."), title=_("Theme"))
+
+	head_html = _head_html_for_row(row)
+	return {
+		"theme": row["name"],
+		"company": row["company"],
+		"head_html": head_html,
+		"has_tokens": bool(_style_block_for_row(row)),
+		"has_brand_assets": bool(_brand_links_html(row)),
+	}

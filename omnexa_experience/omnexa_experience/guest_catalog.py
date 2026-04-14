@@ -8,7 +8,7 @@ HTTP (cart): ``guest_catalog.create_guest_cart_web_order``.
 HTTP (checkout): ``guest_checkout.get_guest_web_order``, ``guest_checkout.submit_guest_web_order``.  
 HTTP (booking): ``guest_booking.*`` (resources, blocks, create, get, cancel).
 
-Rate limits: catalog GET 60/min/IP; cart POST 30/hour/IP; checkout POST 20/hour/IP; booking POSTs as documented in ``guest_booking``.
+Rate limits: catalog GET 60/min/IP; cart POST 30/hour/IP (optional ``customer_email`` on cart); checkout POST 20/hour/IP; booking POSTs as documented in ``guest_booking``.
 See Docs/Omnexa_Public_API_Reference.md §2–2.2; Omnexa_Master_Checklist §G.9.
 """
 
@@ -20,7 +20,17 @@ from typing import Any
 import frappe
 from frappe import _
 from frappe.rate_limiter import rate_limit
-from frappe.utils import cint, flt
+from frappe.utils import cint, flt, validate_email_address
+
+
+def _norm_optional_customer_email(value: str | None) -> str | None:
+	"""Return normalized lowercase email or ``None``; throw if non-empty but invalid."""
+	if not (value or "").strip():
+		return None
+	v = value.strip()
+	if not validate_email_address(v, throw=False):
+		frappe.throw(_("customer_email is not valid."), title=_("Cart"))
+	return v.lower()
 
 
 def _parse_lines_arg(lines: Any) -> list[dict[str, Any]]:
@@ -58,6 +68,7 @@ def _serialize_draft_web_order(wo) -> dict[str, Any]:
 		"company": wo.company,
 		"status": wo.status,
 		"idempotency_key": wo.idempotency_key or "",
+		"customer_email": (wo.customer_email or "").strip(),
 		"grand_total": flt(wo.grand_total),
 		"lines": lines_out,
 	}
@@ -121,10 +132,15 @@ def create_guest_cart_web_order(
 	company: str | None = None,
 	idempotency_key: str | None = None,
 	lines: Any = None,
+	customer_email: str | None = None,
 ):
 	"""
 	Create a **Draft** ``Web Order`` (guest cart) or return an existing one for the same
 	``company`` + ``idempotency_key``.
+
+	Optional ``customer_email`` (validated) is stored on the Web Order for **portal /me** lists.
+	On idempotent retry: if the cart has no email yet, the first non-empty ``customer_email`` is saved;
+	if the cart already has an email and a different one is sent, the request is rejected.
 
 	``lines``: JSON array of ``{ "catalog_item": "<Catalog Item name>", "qty": n, "rate": n, "tax_amount"?: n }``.
 	Catalog items must be **published** and belong to ``company``. Max 50 lines.
@@ -144,6 +160,17 @@ def create_guest_cart_web_order(
 		wo = frappe.get_doc("Web Order", existing)
 		if wo.docstatus != 0 or wo.status != "Draft":
 			frappe.throw(_("Cart cannot be modified."), title=_("Cart"))
+		email_new = _norm_optional_customer_email(customer_email)
+		if email_new:
+			stored = (wo.customer_email or "").strip().lower()
+			if not stored:
+				wo.customer_email = email_new
+				wo.save(ignore_permissions=True)
+			elif stored != email_new:
+				frappe.throw(
+					_("This cart is already linked to another customer email."),
+					title=_("Cart"),
+				)
 		return _serialize_draft_web_order(wo)
 
 	parsed = _parse_lines_arg(lines)
@@ -156,6 +183,7 @@ def create_guest_cart_web_order(
 	wo.company = company
 	wo.idempotency_key = key
 	wo.status = "Draft"
+	wo.customer_email = _norm_optional_customer_email(customer_email) or None
 
 	for raw in parsed:
 		if not isinstance(raw, dict):
