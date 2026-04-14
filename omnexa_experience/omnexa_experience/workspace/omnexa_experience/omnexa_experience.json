@@ -8,7 +8,7 @@
  "hide_custom": 0,
  "icon": "website",
  "idx": 0,
- "is_hidden": 0,
+ "is_hidden": 1,
  "label": "Experience",
  "links": [
   {
@@ -95,7 +95,7 @@
  "number_cards": [],
  "owner": "Administrator",
  "parent_page": "",
- "public": 1,
+ "public": 0,
  "quick_lists": [],
  "restrict_to_domain": "",
  "roles": [],
